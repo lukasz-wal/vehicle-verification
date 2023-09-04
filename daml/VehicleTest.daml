@@ -23,7 +23,7 @@ import Daml.Script
     * testBrokeVehicle
       4. Bob's vehicle broke down
           - Bob exercises ChangeVehicleState to set as the vehicle is broken
-          - Without this action, anyone of mechanic can't repair the vehicle
+          - Without this action, none of mechanic can repair the vehicle
     * testRepairVehicleRequest
       5.  Bob sends the request to the shop (mechanic)
           - Bob exercises Repair request to a mechanic with details about the repair
@@ -39,11 +39,11 @@ import Daml.Script
       8.  Charlie changes the second broken element
           - Charlie exercises AddRepairItem to add a second repair item to the list with the cost
     * testFinishRepair
-      10. Charlie finish repair
+      10. Charlie finishes repair
           - Charlie exercises FinishRepair to change the status of the repair process contract to Finished and 
           - The cost of these repaired items is calculated
     * testConfirmRepairByOwner
-      11. Bob check the repair
+      11. Bob checks the repair
           - Bob exercises ConfirmRepair after positive verification of the repair process
     * finishRepairProcess
       12. Finish the repair process and the vehicle can be used or can be sold

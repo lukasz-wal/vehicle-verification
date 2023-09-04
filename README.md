@@ -6,9 +6,9 @@ Vehicle verification is a example app build in DAML
 ### I. Overview 
 The vehicle verification project is used to verify the history of the vehicle during its change of ownership or the process of removing defects.
 
-The owner of the vehicle can Vehicle contract.
-The owner can sell the vehicle to another owner creating a contract called SellTransaction, and the future ownership can Accept or Reject the transaction. The owner can Cancel the transaction.
-The vehicle can break down and after that, only the owner of the vehicle can create a new contract called RepairProcess with a request to the mechanic to start the process of repairing, but only the mechanic can Accept or Reject this process. After confirmation by the mechanic, the repair process changes the status to Processing. While the repair process is in progress, the Mechanic can add broken items(AddRepairItem) to the registry. After repair, the mechanic changed the repair progress to Finished and only of the owner of this vehicle can confirm the fix.
+The owner of the vehicle can create the Vehicle contract.
+The owner can sell the vehicle to another owner creating a contract called SellTransaction, and the future owner can Accept or Reject the transaction. The owner can Cancel the transaction.
+The vehicle can break down and after that, only the owner of the vehicle can create a new contract called RepairProcess with a request to the mechanic to start the process of repairing, but only the mechanic can Accept or Reject this process. After confirmation by the mechanic, the repair process changes the status to Processing. While the repair process is in progress, the Mechanic can add broken items(AddRepairItem) to the registry. After repair, the mechanic changes the repair progress to Finished and only of the owner of this vehicle can confirm the fix.
 After that mechanic can create a VehicleRepairs contract which contains a registry of repairs for this vehicle with costs. Next vehicle can be used or sold.
 
 ### II. Workflow
@@ -32,7 +32,7 @@ After that mechanic can create a VehicleRepairs contract which contains a regist
         
         4. Bob's vehicle broke down
           > Bob exercises ChangeVehicleState to set as the vehicle is broken
-          > Without this action, anyone of mechanic can't repair the vehicle
+          > Without this action, none of the mechanics can repair the vehicle
 
         5.  Bob sends the request to the shop (mechanic)
           > Bob exercises Repair request to a mechanic with details about the repair
@@ -45,11 +45,11 @@ After that mechanic can create a VehicleRepairs contract which contains a regist
         7.  Charlie changes the first broken element
           > Charlie exercises AddRepairItem to add the first repair item to the list with the cost
 
-        10. Charlie finish repair
+        10. Charlie finishes repair
           > Charlie exercises FinishRepair to change the status of the repair process contract to Finished and 
           > The cost of these repaired items is calculated
         
-        11. Bob check the repair
+        11. Bob checks the repair
           > Bob exercises ConfirmRepair after positive verification of the repair process
 
         12. Finish the repair process and the vehicle can be used or can be sold
