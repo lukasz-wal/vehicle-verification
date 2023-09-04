@@ -1,0 +1,237 @@
+module VehicleVerification where
+
+type VehicleId = ContractId Vehicle
+type SellTrancactionId = ContractId SellTransaction
+type RepairProcessId = ContractId RepairProcess
+type VehicleRepairsId = ContractId VehicleRepairs
+
+-- custom enum data type contains status of repair process
+data Statuses = StatusProcessing | StatusFinished | StatusPending
+  deriving (Eq, Show)
+
+-- custom data type for details of vehicle
+data MotoDeptData = MotoDeptData
+  with
+    vin: Text
+    brand: Text
+    model: Text
+    engine: Decimal
+    gasType: Text
+    dateOfManufacture: Date
+    additionalDetail: Optional (Text)
+  deriving (Eq, Show)
+
+-- custom data type contains repair item and cost while fixing by mechanic
+data RepairItem = RepairItem
+  with
+    name: Text
+    cost: Decimal
+  deriving (Eq, Show)
+
+-- repair process template can be created by vehicle owner
+-- contains the currently state of repair process
+template RepairProcess with
+  shopOwner : Party
+  vehicle: Vehicle
+  odometer: Int
+  status: Statuses
+  moneyCharged: Optional Decimal
+  currency: Optional Text
+  repairConfirmed: Bool
+  repairItems: [RepairItem]
+    where
+      signatory vehicle.owner
+      observer shopOwner
+
+      -- only shop owner (mechnic) can reject the request about repair
+      choice RejectRepair: ()
+        controller shopOwner
+          do return ()
+      
+      -- accept repair request only by mechanic and set up correct status
+      choice AcceptRepair: RepairProcessId
+        controller shopOwner
+        do
+          create this with
+            shopOwner
+            vehicle
+            odometer
+            status = StatusProcessing
+
+      -- add repair item to items list
+      choice AddRepairItem: RepairProcessId
+        with
+          item: RepairItem
+        controller shopOwner
+          do
+            create this with
+              repairItems = item :: repairItems
+      
+      -- finish repair and calculate cost for each fixed item
+      choice FinishRepair : RepairProcessId
+        controller shopOwner
+          do
+            let totalCost = foldl (\acc y -> acc + y.cost) 0.0 this.repairItems
+
+            create this with
+              status = StatusFinished
+              moneyCharged = Some totalCost
+              currency = Some "USD"
+
+      -- confirm fixed repairs by owner of vehicle
+      choice ConfirmRepair : RepairProcessId
+        controller vehicle.owner
+        do
+          assertMsg ("Only fixed vehicle can be confirmed !")(this.status == StatusFinished)
+
+          create this with
+            repairConfirmed = True
+
+      -- add result of repair process to global registry
+      choice AddRepairToRegistry : VehicleRepairsId
+        with
+          workDescription: Text
+        controller shopOwner
+        do
+          assertMsg ("Only confirmed repair can be added to registry!")(this.repairConfirmed)
+
+          create VehicleRepairs with
+            worker = shopOwner
+            description = workDescription
+            moneyCharged
+            odometer
+
+-- global template as registry contains vehicle repairs
+template VehicleRepairs with
+  worker: Party
+  description: Text
+  moneyCharged: Optional Decimal
+  odometer: Int
+    where 
+      signatory worker
+
+      key worker : Party
+      maintainer key
+
+--custom data type for sell transaction
+data SellTransactionData = SellTransactionData
+  with    
+    price: Decimal
+    currency: Text
+  deriving (Eq, Show)
+
+-- template for sell transaction
+template SellTransaction with
+  vehicle: Vehicle
+  newOwner: Party
+  details: SellTransactionData
+  odometer: Int
+    where
+      signatory vehicle.owner
+      observer newOwner
+
+      key (vehicle.owner) : Party
+      maintainer key
+
+      -- protect the sell with wrong odometer value
+      ensure odometer >= vehicle.odometer 
+  
+      -- cancel transaction only by the owner of vehicle
+      choice Cancel : VehicleId
+        controller vehicle.owner
+        do 
+          create vehicle 
+
+      -- reject transaction by new owner
+      choice Reject : VehicleId
+        controller newOwner
+        do 
+          create vehicle
+
+      -- accept transaction by new owner
+      choice Accept : VehicleId
+        controller newOwner
+        do
+          create vehicle with
+            owner = newOwner
+            odometer
+
+-- the main template contains data about vehicle
+template Vehicle 
+  with
+    owner: Party
+    details: MotoDeptData
+    odometer: Int
+    isBroken: Bool
+    isBan: Bool
+  where
+      signatory owner
+
+      key (owner, details.vin) : (Party, Text)
+      maintainer key._1
+
+      -- sell action
+      choice Sell: SellTrancactionId 
+        with 
+          newOwner: Party
+          price: Decimal
+          currency: Text
+          odometer: Int
+        controller owner
+          do
+            assertMsg ("Cannot sell vehicle - its baned") (not isBan)
+            
+            let 
+              newTransactionData = SellTransactionData with
+                price
+                currency
+
+            create SellTransaction with 
+              vehicle = this
+              newOwner
+              details = newTransactionData
+              odometer
+
+      -- check if the vehicle can be sold
+      nonconsuming choice CanSellTheVehicle : Either (Bool) (Bool, Text)
+        controller owner
+          do
+            if isBan then
+              return (Left False)
+            else if isBroken then
+              return (Right (True, "But vehicle is currently broken"))
+            else
+              return (Left True)
+
+      -- change vehicle state depends on fix (before or after)
+      choice ChangeVehicleState : VehicleId
+        with 
+          afterFix: Bool
+        controller owner
+          do
+            if afterFix then
+              create this with 
+                isBroken = False
+            else
+              create this with 
+                isBroken = True
+
+      -- repair request to mechanic
+      nonconsuming choice Repair : RepairProcessId
+          with 
+            shop : Party  
+            odometer: Int
+            workDescription: Text
+          controller owner
+            do  
+              assertMsg ("Only broken vehicle can be repaired !")(isBroken)
+
+              create RepairProcess with
+                shopOwner = shop
+                vehicle = this
+                odometer
+                status = StatusPending
+                moneyCharged = None
+                currency = None
+                repairConfirmed = False
+                repairItems = []
