@@ -1,0 +1,56 @@
+module VehicleSetup where
+
+import VehicleVerification
+import Daml.Script
+import DA.Date
+
+-- custom data type contains parties
+data Parties = Parties
+  with
+    alice : Party
+    bob : Party
+    charlie: Party
+  deriving (Show, Eq)
+
+-- allocate the parties
+setupTestParties : Script Parties
+setupTestParties = script do
+  alice <- allocatePartyWithHint "Alice" (PartyIdHint "Alice")
+  bob <- allocatePartyWithHint "Bob" (PartyIdHint "Bob")
+  charlie <- allocatePartyWithHint "Charlie" (PartyIdHint "Charlie")
+
+  return Parties with
+    alice
+    bob
+    charlie
+
+setupUsers : Script (ContractId Vehicle)
+
+setupUsers = script do
+    parties@Parties{..} <- setupTestParties
+
+    aliceId <- validateUserId "Alice" -- first owner
+    bobId <- validateUserId "Bob" -- second owner
+    charlieId <- validateUserId "Charlie" --shop owner
+
+    -- create users and give them specific rights
+    createUser (User aliceId (Some alice)) [CanActAs alice]
+    createUser (User bobId (Some bob)) [CanActAs bob]
+    createUser (User charlieId (Some charlie)) [CanActAs charlie]
+
+    newVehicleId <- submit alice do
+      createCmd Vehicle with
+        owner = alice
+        odometer = 100
+        isBroken = False
+        isBan = False
+        details = MotoDeptData with
+          vin = "asdfghjklpoiuytrewq12345"
+          brand = "Audi"
+          model = "A7"
+          engine = 2.8
+          gasType = "PB"
+          dateOfManufacture = date 2023 Jan 16
+          additionalDetail = Some "Nothing special"
+
+    return (newVehicleId)

@@ -1,0 +1,272 @@
+module VehicleTest where
+
+import VehicleVerification
+import VehicleSetup
+import DA.Date
+import Daml.Script
+
+{-
+  - Alice - the first owner of the vehicle
+  - Bob - the second owner of the vehicle
+  - Charlie - car shop - mechanic
+
+  ------------------- Full scenario with happy path -------------------
+    * testCreateVehicle
+      1.  Alice creates a new vehicle contract
+    * testSellVehicle
+      2.  Alice wants to sell the vehicle to Bob:
+          - Alice exercises CanSellTheVehicle to check if the vehicle can be sold
+          - Alice exercises Sell to Bob, and the new contract SellTransaction is created with the actual state of the vehicle and price
+    * testBobAcceptTransaction
+      3.  Bob accepts the transaction
+          - Bob exercises Accept the request and he became the new owner of the vehicle
+    * testBrokeVehicle
+      4. Bob's vehicle broke down
+          - Bob exercises ChangeVehicleState to set as the vehicle is broken
+          - Without this action, anyone of mechanic can't repair the vehicle
+    * testRepairVehicleRequest
+      5.  Bob sends the request to the shop (mechanic)
+          - Bob exercises Repair request to a mechanic with details about the repair
+          - Contract RepairProcess is created with status Pending - waiting for a mechanic decision
+    * testAcceptRepairVehicleRequest
+      6.  Charlie as a mechanic accepts bob request
+          - Charlie exercises AcceptRepair and the status of the contract RepairProcess changed to Processing
+          - Charlie fixing a vehicle
+    * testAddFixedItem1
+      7.  Charlie changes the first broken element
+          - Charlie exercises AddRepairItem to add the first repair item to the list with the cost
+    * testAddFixedItem2
+      8.  Charlie changes the second broken element
+          - Charlie exercises AddRepairItem to add a second repair item to the list with the cost
+    * testFinishRepair
+      10. Charlie finish repair
+          - Charlie exercises FinishRepair to change the status of the repair process contract to Finished and 
+          - The cost of these repaired items is calculated
+    * testConfirmRepairByOwner
+      11. Bob check the repair
+          - Bob exercises ConfirmRepair after positive verification of the repair process
+    * finishRepairProcess
+      12. Finish the repair process and the vehicle can be used or can be sold
+          - Charlie exercises AddRepairToRegistry to create a new contract VehicleRepairs - global registry of repairs
+          - Bob as an owner exercises ChangeVehicleState after the repair process and changes the vehicle state to is not broken
+    
+    ------------------- Unhappy path -------------------
+    * testWrongSellVehicle1
+      1.  Try selling a vehicle
+          - Alice can't exercise Sell with the wrong odometer
+    * testWrongSellVehicle2
+      2.  Cancel transaction
+          - Bob can't exercise Cancel on a SellTransaction contract because he isn't an owner of this vehicle
+    * testFailRepairVehicleRequest
+      3.  Repair request
+          - Bob can't exercise Repair to create a new contract RepairProcess because the vehicle isn't broken
+    * testFailTestAddRepairToRegistry
+      4.  Add to the registry
+          - Charlie (the mechanic) can't create a new contract VehicleRepairs before the confirmation repair process by the owner
+-}
+
+-- Create a vehicle and set vehicle owner to Alice
+testCreateVehicle : Script (Parties, ContractId Vehicle)
+testCreateVehicle = script do
+  parties@Parties{..} <- setupTestParties
+
+  newVehicle <- submit alice do 
+    createCmd Vehicle with
+      owner = alice
+      odometer = 100
+      isBroken = False
+      isBan = False
+      details = MotoDeptData with
+        vin = "asdfghjklpoiuytrewq12345"
+        brand = "Audi"
+        model = "A7"
+        engine = 2.8
+        gasType = "PB"
+        dateOfManufacture = date 2023 Jan 16
+        additionalDetail = Some "Nothing special"
+  
+  return (parties, newVehicle)
+
+
+-- Fail sell 
+-- Try sell vehicle with wrong odometer value
+testWrongSellVehicle1 : Script ()
+testWrongSellVehicle1 = script do 
+  (parties@Parties{..}, newVehicle) <- testCreateVehicle
+  
+  submitMustFail alice do 
+      exerciseCmd newVehicle Sell with
+        newOwner = bob
+        price = 10000.0
+        currency = "USD"
+        odometer = 50
+  
+-- Properly sell vehicle
+testSellVehicle : Script (Parties, SellTrancactionId)
+testSellVehicle = script do
+  (parties@Parties{..}, newVehicle) <- testCreateVehicle
+  
+  canSell <- submit alice do 
+    exerciseCmd newVehicle CanSellTheVehicle
+
+  debug $ canSell
+
+  -- alice want sell vehicle to bob
+  aliceBobTransaction <- submit alice do
+    exerciseCmd newVehicle Sell with
+      newOwner = bob
+      price = 10000.0
+      currency = "USD"
+      odometer = 200
+
+  return (parties, aliceBobTransaction)
+
+-- Fail sell
+-- Only alice (as an owner) has a permission to Cancel transaction
+testWrongSellVehicle2 : Script ()
+testWrongSellVehicle2 = script do 
+  (parties@Parties{..}, aliceBobTransaction) <- testSellVehicle
+  
+  bobHasVehicle <- query @Vehicle bob
+  debug $ bobHasVehicle --empty array (contract doesn't exist) so bob hasn't a vehicle and he can't cancel the transaction
+
+  submitMustFail bob do 
+    exerciseCmd aliceBobTransaction Cancel
+
+-- accept the sell transaction by bob
+testBobAcceptTransaction : Script (Parties, VehicleId)
+testBobAcceptTransaction = script do
+  (parties@Parties{..}, aliceBobTransaction) <- testSellVehicle
+
+  bobVehicle <- submit bob do
+    exerciseCmd aliceBobTransaction Accept
+  
+  return (parties, bobVehicle)
+
+-- the vehicle broke down
+-- set vehicle as broken by new owner (Bob)
+testBrokeVehicle : Script (Parties, VehicleId)
+testBrokeVehicle = script do
+  (parties@Parties{..}, bobVehicle) <- testBobAcceptTransaction
+
+  brokenVehicle <- submit bob do
+    exerciseCmd bobVehicle ChangeVehicleState 
+      with
+        afterFix = False
+  
+  return (parties, brokenVehicle)
+
+-- fail transaction
+-- vehicle isn't broken
+testFailRepairVehicleRequest : Script ()
+testFailRepairVehicleRequest = script do
+  (parties@Parties{..}, bobVehicle) <- testBobAcceptTransaction
+  
+  submitMustFail bob do
+    exerciseCmd bobVehicle Repair 
+      with
+        shop = charlie
+        odometer = 300
+        workDescription = "Broken left tire"
+
+-- send request to vehicle mechanic if he will fix the veicle
+testRepairVehicleRequest : Script (Parties, VehicleId, RepairProcessId)
+testRepairVehicleRequest = script do
+  (parties@Parties{..}, brokenVehicle) <- testBrokeVehicle
+  
+  Some vehicle <- queryContractId bob brokenVehicle
+
+  debug $ show vehicle.isBroken --show the information, is it broken vehicle? because only broken could be repair
+
+  repairRequest <- submit bob do
+    exerciseCmd brokenVehicle Repair 
+      with
+        shop = charlie
+        odometer = 300
+        workDescription = "Broken left tire"
+
+  return (parties, brokenVehicle, repairRequest)
+
+-- the mechanic accept the request about repair and start working on it
+testAcceptRepairVehicleRequest = script do
+  (parties@Parties{..}, brokenVehicle, repairRequest) <- testRepairVehicleRequest
+  
+  vehicleInRepairProcess <- submit charlie do
+    exerciseCmd repairRequest AcceptRepair
+ 
+  return (parties, brokenVehicle, vehicleInRepairProcess)
+
+-- the mechanic add broken item to registry
+testAddFixedItem1 = script do
+  (parties@Parties{..}, brokenVehicle, vehicleInRepairProcess) <- testAcceptRepairVehicleRequest
+
+  repairProcess <- submit charlie do
+    exerciseCmd vehicleInRepairProcess AddRepairItem
+      with
+        item = RepairItem with
+          name = "Tire Left"
+          cost = 200.0
+
+  return (parties, brokenVehicle, repairProcess)
+
+-- the mechanic add another broken item to registry
+testAddFixedItem2 = script do
+  (parties@Parties{..}, brokenVehicle, repairProcess) <- testAddFixedItem1
+
+  repairProcess1 <- submit charlie do
+    exerciseCmd repairProcess AddRepairItem
+      with
+        item = RepairItem with
+          name = "Tire Right"
+          cost = 200.0
+
+  return (parties, brokenVehicle, repairProcess1)
+
+-- the mechanic finished a repair process and the cost of this process has automatically calculated
+testFinishRepair = script do
+  (parties@Parties{..}, brokenVehicle, repairProcess1) <- testAddFixedItem2
+
+  -- finish repair
+  vehicleRepairedProcessFinished <- submit charlie do
+    exerciseCmd repairProcess1 FinishRepair
+  
+  return (parties, brokenVehicle, vehicleRepairedProcessFinished)
+ 
+-- Fail test
+-- The mechanic cant add repair to registry before confimation by owner (requestor)
+testFailTestAddRepairToRegistry : Script ()
+testFailTestAddRepairToRegistry = script do
+  (parties@Parties{..}, brokenVehicle, vehicleRepairedProcessFinished) <- testAcceptRepairVehicleRequest
+  
+  submitMustFail charlie do 
+    exerciseCmd vehicleRepairedProcessFinished AddRepairToRegistry
+      with
+        workDescription = "Change left and right front tires"
+        
+  return ()
+
+-- the owner confirm the repair by mechanic
+testConfirmRepairByOwner : Script (Parties, VehicleId, RepairProcessId)
+testConfirmRepairByOwner = script do
+  (parties@Parties{..}, brokenVehicle, vehicleRepairedProcessFinished) <- testFinishRepair
+
+  confirmRepairProcess <- submit bob do
+    exerciseCmd vehicleRepairedProcessFinished ConfirmRepair
+  
+  return (parties, brokenVehicle, confirmRepairProcess)
+
+-- the mechanic after repair confirmation by owner add this fix to global repair registry of this vehicle
+finishRepairProcess = script do
+  (parties@Parties{..}, brokenVehicle, confirmRepairProcess) <- testConfirmRepairByOwner
+
+  repairRegistry <- submit charlie do
+    exerciseCmd confirmRepairProcess AddRepairToRegistry
+      with
+        workDescription = "Change left and right front tire"
+
+  fixedVehicle <- submit bob do
+    exerciseCmd brokenVehicle ChangeVehicleState 
+      with
+        afterFix = True
+  
+  return (repairRegistry, fixedVehicle)
